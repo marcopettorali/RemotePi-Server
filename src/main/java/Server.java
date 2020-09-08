@@ -1,5 +1,7 @@
 import javax.swing.*;
 import java.awt.*;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.*;
 import java.io.*;
 import java.net.*;
@@ -13,11 +15,11 @@ public class Server extends Thread {
     final private String PING_MSG = "PI";
 
     //mouse constants
-
     final private String MOUSE_BUTTON_HEADER = "BT";
     final private String MOUSE_WHEEL_HEADER = "WH";
     final private String MOUSE_POSITION_HEADER = "PO";
     final private String MOUSE_SCREEN_REF_HEADER = "SR";
+    final private String TEXT_HEADER = "TX";
 
     int port;
 
@@ -136,12 +138,22 @@ public class Server extends Thread {
                         payload = sentence.substring(2);
                         handleMousePosition(payload);
                         break;
+                    case TEXT_HEADER:
+                        payload = sentence.substring(2);
+                        handleReceivedText(payload);
+                        break;
                 }
 
             }
         } catch (IOException e) {
             System.out.println(e);
         }
+    }
+
+    private void handleReceivedText(String payload) {
+        StringSelection stringSelection = new StringSelection(payload);
+        Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+        clipboard.setContents(stringSelection, null);
     }
 
     private double normalizeZCoordinate(double z, double zAxisMin, double zAxisMax) {
