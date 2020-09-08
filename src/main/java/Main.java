@@ -126,6 +126,10 @@ public class Main extends JPanel {
         }
 
 
-        new Server(8888).start();
+        try {
+            new Server(8888).start();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

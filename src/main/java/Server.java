@@ -1,5 +1,4 @@
-import javafx.application.Platform;
-
+import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
@@ -28,93 +27,78 @@ public class Server extends Thread {
 
     final int BUFFER_SIZE = 1024 * 1024;
 
-    double y_axis_min;
-    double y_axis_max;
+    double yAxisBottom;
+    double yAxisTop;
 
-    double z_axis_min;
-    double z_axis_max;
+    double zAxisLeft;
+    double zAxisRight;
 
-    int screen_width;
-    int screen_height;
+    int SCREEN_WIDTH;
+    int SCREEN_HEIGHT;
 
     Robot mouse;
 
-    int[] x_window;
-    int[] y_window;
-    int window_dim = 20;
+    int[] xScreenMovingWindow;
+    int[] yScreenMovingWindow;
+    int screenMovingWindowPointer;
+    int screenMovingWindowSize = 20;
 
-    int prev_x = 0;
-    int prev_y = 0;
+    int previousXPoint = 0;
+    int previousYPoint = 0;
 
     double margin = BASE_MARGIN;
 
-    boolean offset_on = false;
-    boolean bl_received = false;
-    boolean tr_received = false;
+    boolean bottomLeftCornerReceived = false;
+    boolean topRightCornerReceived = false;
     DatagramSocket serverSocket;
 
-    public Server(int port) {
+    public Server(int port) throws Exception {
         super();
+
+        // setup server socket
         this.port = port;
         try {
             serverSocket = new DatagramSocket(port);
         } catch (SocketException e) {
             e.printStackTrace();
         }
-    }
 
-    private long normalizeZCoordinate(long z, long zAxisMin, long zAxisMax) {
-        if (zAxisMin > zAxisMax) {
-            return z;
-        } else {
-            // We map each positive value to the right of -1/1 point in the compass circle
-            // to a virtual point on the circle as there was not discontinuity.
-            // So 1 is mapped to -1, 0.99 is mapped to -1.01, and so on:
-            // the mapping function is trivially y = x-2
-            return z - 2;
+        // extract current position
+        Socket internetSocket = null;
+        try {
+            internetSocket = new Socket("8.8.8.8", 53);
+            System.out.println("Listening on udp:" + internetSocket.getLocalAddress() + ":" + port);
+            Main.generateQRCodeImage(internetSocket.getLocalAddress() + ":" + port);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(null, "No internet connection. Retry later.", "RemotePi Server", JOptionPane.ERROR_MESSAGE);
+            throw new Exception("No internet connection. Retry later.");
         }
-    }
 
-    public void run() {
+        //instantiate mouse
         try {
             mouse = new Robot();
         } catch (AWTException e) {
             e.printStackTrace();
         }
 
+        //get screen's dimensions
         Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
-        screen_width = screenSize.width;
-        screen_height = screenSize.height;
+        SCREEN_WIDTH = screenSize.width;
+        SCREEN_HEIGHT = screenSize.height;
+
+        //initialize the samples' moving window
+        xScreenMovingWindow = new int[screenMovingWindowSize];
+        yScreenMovingWindow = new int[screenMovingWindowSize];
+        screenMovingWindowPointer = 0;
+
+    }
+
+    public void run() {
         try {
             byte[] receiveData = new byte[BUFFER_SIZE];
-
-
-            Socket s = null;
-            try {
-                s = new Socket("8.8.8.8", 53);
-                System.out.println("Listening on udp:" + s.getLocalAddress() + ":" + port);
-                Main.generateQRCodeImage(s.getLocalAddress() + ":" + port);
-            } catch (IOException e) {
-                try {
-                    System.out.println(("No internet: impossible to determine my local address\nApproximative address: udp:" + InetAddress.getLocalHost().getHostName() + ":" + port));
-                } catch (UnknownHostException unknownHostException) {
-                    unknownHostException.printStackTrace();
-                }
-            }
-
             DatagramPacket receivePacket = new DatagramPacket(receiveData, BUFFER_SIZE);
 
-            boolean exit = false;
-
-            double y_axis_val = 0;
-            double z_axis_val = 0;
-
-            x_window = new int[window_dim];
-            y_window = new int[window_dim];
-            int window_pointer = 0;
-
             while (true) {
-
                 serverSocket.receive(receivePacket);
                 String sentence = new String(receivePacket.getData(), 0, receivePacket.getLength());
 
@@ -148,151 +132,63 @@ public class Server extends Thread {
                         payload = sentence.substring(2);
                         handleMouseWheel(payload);
                         break;
-                }
-                String y_axis = "";
-                String z_axis = "";
-
-                boolean z_axis_mode = false;
-                boolean bottom_left_mode = false;
-                boolean top_right_mode = false;
-
-                for (int i = 0; i < sentence.length(); i++) {
-                    char c = sentence.charAt(i);
-
-                    if (c == 'B') {
-                        bottom_left_mode = true;
-                        continue;
-                    }
-
-                    if (c == 'T') {
-                        top_right_mode = true;
-                        continue;
-                    }
-
-                    if (c == 'Y') {
-                        continue;
-                    }
-                    if (c == 'C') {
-                        z_axis_mode = true;
-                        continue;
-                    }
-
-                    if (z_axis_mode) {
-                        z_axis += c;
-                    } else {
-                        y_axis += c;
-                    }
-
+                    case MOUSE_POSITION_HEADER:
+                        payload = sentence.substring(2);
+                        handleMousePosition(payload);
+                        break;
                 }
 
-                if (exit) {
-                    exit = false;
-                    continue;
-                }
-
-                try {
-                    y_axis_val = Double.parseDouble(y_axis);
-                } catch (Exception e) {
-                }
-
-                try {
-                    z_axis_val = Double.parseDouble(z_axis);
-                } catch (Exception e) {
-                }
-
-                if (bottom_left_mode) {
-                    y_axis_min = y_axis_val;
-                    z_axis_min = z_axis_val;
-
-                    bl_received = true;
-
-                    if (tr_received) {
-                        tr_received = false;
-
-                        if (z_axis_min * z_axis_max < 0 && Math.abs(z_axis_min - z_axis_max) > 1) {
-                            offset_on = true;
-                            if (z_axis_min < 0) {
-                                z_axis_min += 1;
-                            } else {
-                                z_axis_min -= 1;
-                            }
-
-                            if (z_axis_max < 0) {
-                                z_axis_max += 1;
-                            } else {
-                                z_axis_max -= 1;
-                            }
-
-                        }
-                    }
-
-                } else if (top_right_mode) {
-                    y_axis_max = y_axis_val;
-                    z_axis_max = z_axis_val;
-
-                    tr_received = true;
-
-                    if (bl_received) {
-                        bl_received = false;
-
-                        if (z_axis_min * z_axis_max < 0 && Math.abs(z_axis_min - z_axis_max) > 1) {
-                            offset_on = true;
-                            if (z_axis_min < 0) {
-                                z_axis_min += 1;
-                            } else {
-                                z_axis_min -= 1;
-                            }
-
-                            if (z_axis_max < 0) {
-                                z_axis_max += 1;
-                            } else {
-                                z_axis_max -= 1;
-                            }
-
-                        }
-                    }
-
-                }
-
-                //-----------------------------------------//
-                if (offset_on) {
-                    if (z_axis_val < 0) {
-                        z_axis_val += 1;
-                    } else {
-                        z_axis_val -= 1;
-                    }
-                }
-
-                int x_ = (int) Math.round(screen_width * (z_axis_val - z_axis_min) / (z_axis_max - z_axis_min));
-                int y_ = (int) Math.round(screen_height * (y_axis_val - y_axis_max) / (y_axis_min - y_axis_max));
-
-                //System.out.println(Math.round(100.0 * y_axis_val) / 100.0 + ";" + Math.round(100.0 * z_axis_val) / 100.0);
-                x_window[window_pointer] = x_;
-                y_window[window_pointer] = y_;
-
-                window_pointer++;
-                if (window_pointer == window_dim) {
-                    int x = 0, y = 0;
-                    for (int p = 0; p < window_dim; p++) {
-                        x += x_window[p];
-                        y += y_window[p];
-                    }
-                    x = x / window_dim;
-                    y = y / window_dim;
-
-                    if (Math.abs(x - prev_x) > margin * screen_width && Math.abs(y - prev_y) > margin * screen_height) {
-
-                        mouse.mouseMove(x, y);
-                        prev_x = x;
-                        prev_y = y;
-                    }
-
-                    window_pointer = 0;
-
-                }
             }
         } catch (IOException e) {
             System.out.println(e);
+        }
+    }
+
+    private double normalizeZCoordinate(double z, double zAxisMin, double zAxisMax) {
+        if (zAxisMin > zAxisMax) {
+            return z;
+        } else if (z > 0) {
+            // We map each positive value to the right of -1/1 point in the compass circle
+            // to a virtual point on the circle as there was not discontinuity.
+            // So 1 is mapped to -1, 0.99 is mapped to -1.01, and so on:
+            // the mapping function is trivially y = x-2
+            return z - 2;
+        } else {
+            return z;
+        }
+    }
+
+    private void handleMousePosition(String position) {
+        double[] coordinates = extractCoordinates(position);
+        double yVector = coordinates[0];
+        double zVector = normalizeZCoordinate(coordinates[1], zAxisLeft, zAxisRight);
+
+        double zVectorRightNormalized = normalizeZCoordinate(zAxisRight, zAxisLeft, zAxisRight);
+
+        int xSample = (int) Math.round(SCREEN_WIDTH * (zVector - zAxisLeft) / (zVectorRightNormalized - zAxisLeft));
+        int ySample = (int) Math.round(SCREEN_HEIGHT * (yVector - yAxisTop) / (yAxisBottom - yAxisTop));
+
+        xScreenMovingWindow[screenMovingWindowPointer] = xSample;
+        yScreenMovingWindow[screenMovingWindowPointer] = ySample;
+
+        screenMovingWindowPointer++;
+        if (screenMovingWindowPointer == screenMovingWindowSize) {
+            int currentXPoint = 0;
+            int currentYPoint = 0;
+
+            for (int i = 0; i < screenMovingWindowSize; i++) {
+                currentXPoint += xScreenMovingWindow[i];
+                currentYPoint += yScreenMovingWindow[i];
+            }
+            currentXPoint /= screenMovingWindowSize;
+            currentYPoint /= screenMovingWindowSize;
+
+            if (Math.abs(currentXPoint - previousXPoint) > margin * SCREEN_WIDTH && Math.abs(currentYPoint - previousYPoint) > margin * SCREEN_HEIGHT) {
+                mouse.mouseMove(currentXPoint, currentYPoint);
+                previousXPoint = currentXPoint;
+                previousYPoint = currentYPoint;
+            }
+            screenMovingWindowPointer = 0;
         }
     }
 
@@ -302,7 +198,6 @@ public class Server extends Thread {
 
         } else if (action.charAt(0) == 'U') {
             mouse.mouseWheel(-3);
-
         }
     }
 
@@ -341,8 +236,21 @@ public class Server extends Thread {
         }
     }
 
-    private void setScreenReferences(String position) {
-
+    private void setScreenReferences(String payload) {
+        char mode = payload.charAt(0);
+        String position = payload.substring(1);
+        double[] coordinates = extractCoordinates(position);
+        double y = coordinates[0];
+        double z = coordinates[1];
+        if (mode == 'B') {
+            yAxisBottom = y;
+            zAxisLeft = z;
+            bottomLeftCornerReceived = true;
+        } else if (mode == 'T') {
+            yAxisTop = y;
+            zAxisRight = z;
+            topRightCornerReceived = true;
+        }
     }
 
     private void answerPing(InetAddress address) {
@@ -377,6 +285,38 @@ public class Server extends Thread {
             pb.start();
         } catch (IOException e) {
             e.printStackTrace();
+        }
+    }
+
+    private double[] extractCoordinates(String payload) {
+        String yCoordinateStr = "";
+        String zCoordinateStr = "";
+        boolean zMode = false;
+
+        for (int i = 0; i < payload.length(); i++) {
+            char c = payload.charAt(i);
+            if (c == 'C') {
+                zMode = true;
+                continue;
+            } else if (c == 'Y') {
+                zMode = false;
+                continue;
+            }
+
+            if (!zMode) {
+                yCoordinateStr += c;
+            } else {
+                zCoordinateStr += c;
+            }
+        }
+        try {
+            double[] ret = new double[2];
+            ret[0] = Double.parseDouble(yCoordinateStr);
+            ret[1] = Double.parseDouble(zCoordinateStr);
+            return ret;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
         }
     }
 }
